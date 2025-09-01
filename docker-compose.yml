@@ -1,0 +1,12 @@
+version: "3.8"
+services:
+ 
+  bff:
+    build: ./bff-spring
+    environment:
+      - FN_PRODUCTOS_BASEURL=http://host.docker.internal:7071/api/productos
+      - FN_BODEGAS_BASEURL=http://host.docker.internal:7072/api/bodegas
+    ports:
+      - "8080:8080"
+    depends_on:
+      - oracle
