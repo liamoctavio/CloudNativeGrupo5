@@ -1,0 +1,6 @@
+com\bff\ms\api\BodegaDto.class
+com\bff\ms\api\ProductoDto.class
+com\bff\ms\config\WebClientConfig.class
+com\bff\ms\api\ProductosController.class
+com\bff\ms\BffApplication.class
+com\bff\ms\api\BodegasController.class

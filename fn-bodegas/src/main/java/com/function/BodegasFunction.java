@@ -1,5 +1,6 @@
 package com.function;
 
+import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.function.db.Db;
 import com.function.model.Bodega;
@@ -10,30 +11,63 @@ import java.io.IOException;
 import java.sql.*;
 import java.util.*;
 
-
 public class BodegasFunction {
-  private static final ObjectMapper MAPPER = new ObjectMapper();
+
+  private static final ObjectMapper MAPPER = new ObjectMapper()
+      .configure(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES, true);
+
 
   @FunctionName("bodegas")
-  public HttpResponseMessage handle(
-      @HttpTrigger(name = "req", methods = {HttpMethod.GET, HttpMethod.POST, HttpMethod.PUT, HttpMethod.DELETE},
-                   authLevel = AuthorizationLevel.FUNCTION, route = "bodegas/{id?}")
-      HttpRequestMessage<Optional<String>> request,
-      @BindingName("id") String id,
+  public HttpResponseMessage bodegasRoot(
+      @HttpTrigger(
+          name = "req",
+          methods = {HttpMethod.GET, HttpMethod.POST},
+          authLevel = AuthorizationLevel.ANONYMOUS, 
+          route = "bodegas"
+      ) HttpRequestMessage<Optional<String>> request,
       final ExecutionContext ctx) throws Exception {
 
-    switch (request.getHttpMethod().name()) {
-      case "GET": return (id == null) ? listar(request) : obtener(request, Long.parseLong(id));
-      case "POST": return crear(request);
-      case "PUT": return actualizar(request, Long.parseLong(id));
-      case "DELETE": return eliminar(request, Long.parseLong(id));
-      default: return request.createResponseBuilder(HttpStatus.METHOD_NOT_ALLOWED).build();
+    switch (request.getHttpMethod()) {
+      case GET:  return listar(request);
+      case POST: return crear(request);
+      default:   return request.createResponseBuilder(HttpStatus.METHOD_NOT_ALLOWED).build();
     }
   }
 
+
+  @FunctionName("bodegasById")
+  public HttpResponseMessage bodegasById(
+      @HttpTrigger(
+          name = "req",
+          methods = {HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE},
+          authLevel = AuthorizationLevel.ANONYMOUS, 
+          route = "bodegas/{id}"
+      ) HttpRequestMessage<Optional<String>> request,
+      @BindingName("id") String idStr,
+      final ExecutionContext ctx) throws Exception {
+
+    long id;
+    try { id = Long.parseLong(idStr); }
+    catch (NumberFormatException e) {
+      return request.createResponseBuilder(HttpStatus.BAD_REQUEST)
+          .body("{\"error\":\"id inválido\"}")
+          .header("Content-Type","application/json").build();
+    }
+
+    switch (request.getHttpMethod()) {
+      case GET:    return obtener(request, id);
+      case PUT:    return actualizar(request, id);
+      case DELETE: return eliminar(request, id);
+      default:     return request.createResponseBuilder(HttpStatus.METHOD_NOT_ALLOWED).build();
+    }
+  }
+
+
+
   private HttpResponseMessage listar(HttpRequestMessage<?> req) throws SQLException, IOException {
     try (Connection con = Db.connect();
-         PreparedStatement ps = con.prepareStatement("SELECT ID, CODIGO, NOMBRE, DIRECCION FROM BODEGAS ORDER BY ID");
+         PreparedStatement ps = con.prepareStatement(
+             "SELECT ID, CODIGO, NOMBRE, DIRECCION FROM BODEGAS ORDER BY ID");
          ResultSet rs = ps.executeQuery()) {
       List<Bodega> out = new ArrayList<>();
       while (rs.next()) out.add(map(rs));
@@ -41,9 +75,10 @@ public class BodegasFunction {
     }
   }
 
-  private HttpResponseMessage obtener(HttpRequestMessage<?> req, Long id) throws SQLException, IOException {
+  private HttpResponseMessage obtener(HttpRequestMessage<?> req, long id) throws SQLException, IOException {
     try (Connection con = Db.connect();
-         PreparedStatement ps = con.prepareStatement("SELECT ID, CODIGO, NOMBRE, DIRECCION FROM BODEGAS WHERE ID=?")) {
+         PreparedStatement ps = con.prepareStatement(
+             "SELECT ID, CODIGO, NOMBRE, DIRECCION FROM BODEGAS WHERE ID=?")) {
       ps.setLong(1, id);
       try (ResultSet rs = ps.executeQuery()) {
         if (rs.next()) return json(req, map(rs), HttpStatus.OK);
@@ -52,26 +87,69 @@ public class BodegasFunction {
     }
   }
 
-  private HttpResponseMessage crear(HttpRequestMessage<Optional<String>> req) throws Exception {
-    Bodega in = MAPPER.readValue(req.getBody().orElse("{}"), Bodega.class);
-    try (Connection con = Db.connect();
-         PreparedStatement ps = con.prepareStatement(
-             "INSERT INTO BODEGAS (CODIGO, NOMBRE, DIRECCION) VALUES (?,?,?)", new String[]{"ID"})) {
-      ps.setString(1, in.getCodigo());
-      ps.setString(2, in.getNombre());
-      ps.setString(3, in.getDireccion());
-      ps.executeUpdate();
-      try (ResultSet keys = ps.getGeneratedKeys()) {
-        if (keys.next()) return obtener(req, keys.getLong(1));
+  private HttpResponseMessage crear(HttpRequestMessage<Optional<String>> req) {
+    try {
+      String body = req.getBody().orElse("");
+      if (body.isBlank()) {
+        return req.createResponseBuilder(HttpStatus.BAD_REQUEST)
+            .header("Content-Type","application/json")
+            .body("{\"error\":\"Body vacío\"}")
+            .build();
       }
-      return req.createResponseBuilder(HttpStatus.CREATED).build();
+
+      Bodega in = MAPPER.readValue(body, Bodega.class);
+      if (in.getCodigo() == null || in.getNombre() == null || in.getDireccion() == null) {
+        return req.createResponseBuilder(HttpStatus.BAD_REQUEST)
+            .header("Content-Type","application/json")
+            .body("{\"error\":\"codigo, nombre y direccion son obligatorios\"}")
+            .build();
+      }
+
+      try (Connection con = Db.connect();
+           PreparedStatement ps = con.prepareStatement(
+               "INSERT INTO BODEGAS (CODIGO, NOMBRE, DIRECCION) VALUES (?,?,?)")) {
+        ps.setString(1, in.getCodigo());
+        ps.setString(2, in.getNombre());
+        ps.setString(3, in.getDireccion());
+        int rows = ps.executeUpdate();
+        if (rows > 0) {
+          return req.createResponseBuilder(HttpStatus.CREATED)
+              .header("Content-Type","application/json")
+              .body("{\"status\":\"created\"}")
+              .build();
+        }
+        return req.createResponseBuilder(HttpStatus.INTERNAL_SERVER_ERROR)
+            .header("Content-Type","application/json")
+            .body("{\"error\":\"Insert no afectó filas\"}")
+            .build();
+      }
+    } catch (com.fasterxml.jackson.databind.JsonMappingException jm) {
+      return req.createResponseBuilder(HttpStatus.BAD_REQUEST)
+          .header("Content-Type","application/json")
+          .body("{\"error\":\"JSON inválido\",\"detalle\":\"" +
+                jm.getOriginalMessage().replace("\"","'") + "\"}")
+          .build();
+    } catch (SQLException ex) {
+      return req.createResponseBuilder(HttpStatus.INTERNAL_SERVER_ERROR)
+          .header("Content-Type","application/json")
+          .body("{\"error\":\"DB\",\"sqlstate\":\"" + ex.getSQLState() +
+                "\",\"code\":" + ex.getErrorCode() +
+                ",\"message\":\"" + ex.getMessage().replace("\"","'") + "\"}")
+          .build();
+    } catch (Exception e) {
+      return req.createResponseBuilder(HttpStatus.INTERNAL_SERVER_ERROR)
+          .header("Content-Type","application/json")
+          .body("{\"error\":\"server\",\"message\":\"" +
+                e.getMessage().replace("\"","'") + "\"}")
+          .build();
     }
   }
 
-  private HttpResponseMessage actualizar(HttpRequestMessage<Optional<String>> req, Long id) throws Exception {
+  private HttpResponseMessage actualizar(HttpRequestMessage<Optional<String>> req, long id) throws Exception {
     Bodega in = MAPPER.readValue(req.getBody().orElse("{}"), Bodega.class);
     try (Connection con = Db.connect();
-         PreparedStatement ps = con.prepareStatement("UPDATE BODEGAS SET CODIGO=?, NOMBRE=?, DIRECCION=? WHERE ID=?")) {
+         PreparedStatement ps = con.prepareStatement(
+             "UPDATE BODEGAS SET CODIGO=?, NOMBRE=?, DIRECCION=? WHERE ID=?")) {
       ps.setString(1, in.getCodigo());
       ps.setString(2, in.getNombre());
       ps.setString(3, in.getDireccion());
@@ -82,7 +160,7 @@ public class BodegasFunction {
     }
   }
 
-  private HttpResponseMessage eliminar(HttpRequestMessage<?> req, Long id) throws SQLException {
+  private HttpResponseMessage eliminar(HttpRequestMessage<?> req, long id) throws SQLException {
     try (Connection con = Db.connect();
          PreparedStatement ps = con.prepareStatement("DELETE FROM BODEGAS WHERE ID=?")) {
       ps.setLong(1, id);
@@ -106,6 +184,4 @@ public class BodegasFunction {
         .body(MAPPER.writeValueAsString(body))
         .build();
   }
-  
 }
-

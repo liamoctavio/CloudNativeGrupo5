@@ -1,6 +1,6 @@
 package com.function;
 
-
+import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.function.db.Db;
 import com.function.model.Producto;
@@ -13,36 +13,58 @@ import java.sql.*;
 import java.util.*;
 
 public class ProductosFunction {
-  private static final ObjectMapper MAPPER = new ObjectMapper();
+
+  private static final ObjectMapper MAPPER = new ObjectMapper()
+      .configure(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES, true);
 
   @FunctionName("productos")
-  public HttpResponseMessage handle(
+  public HttpResponseMessage productosRoot(
       @HttpTrigger(
           name = "req",
-          methods = {HttpMethod.GET, HttpMethod.POST, HttpMethod.PUT, HttpMethod.DELETE},
-          authLevel = AuthorizationLevel.FUNCTION,
-          route = "productos/{id?}")
-      HttpRequestMessage<Optional<String>> request,
-      @BindingName("id") String id,
-      final ExecutionContext context) throws Exception {
+          methods = {HttpMethod.GET, HttpMethod.POST},
+          authLevel = AuthorizationLevel.ANONYMOUS, 
+          route = "productos"
+      ) HttpRequestMessage<Optional<String>> request,
+      final ExecutionContext ctx) throws Exception {
 
-    switch (request.getHttpMethod().name()) {
-      case "GET":
-        return (id == null) ? listar(request) : obtener(request, Long.parseLong(id));
-      case "POST":
-        return crear(request);
-      case "PUT":
-        return actualizar(request, Long.parseLong(id));
-      case "DELETE":
-        return eliminar(request, Long.parseLong(id));
-      default:
-        return request.createResponseBuilder(HttpStatus.METHOD_NOT_ALLOWED).build();
+    switch (request.getHttpMethod()) {
+      case GET:  return listar(request);
+      case POST: return crear(request);
+      default:   return request.createResponseBuilder(HttpStatus.METHOD_NOT_ALLOWED).build();
     }
   }
 
+
+  @FunctionName("productosById")
+  public HttpResponseMessage productosById(
+      @HttpTrigger(
+          name = "req",
+          methods = {HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE},
+          authLevel = AuthorizationLevel.ANONYMOUS, 
+          route = "productos/{id}"
+      ) HttpRequestMessage<Optional<String>> request,
+      @BindingName("id") String idStr,
+      final ExecutionContext ctx) throws Exception {
+
+    long id;
+    try { id = Long.parseLong(idStr); }
+    catch (NumberFormatException e) {
+      return badRequest(request, "{\"error\":\"id inválido\"}");
+    }
+
+    switch (request.getHttpMethod()) {
+      case GET:    return obtener(request, id);
+      case PUT:    return actualizar(request, id);
+      case DELETE: return eliminar(request, id);
+      default:     return request.createResponseBuilder(HttpStatus.METHOD_NOT_ALLOWED).build();
+    }
+  }
+
+
   private HttpResponseMessage listar(HttpRequestMessage<?> req) throws SQLException, IOException {
     try (Connection con = Db.connect();
-         PreparedStatement ps = con.prepareStatement("SELECT ID, SKU, NOMBRE, STOCK, PRECIO, BODEGA_ID FROM PRODUCTOS ORDER BY ID");
+         PreparedStatement ps = con.prepareStatement(
+             "SELECT ID, SKU, NOMBRE, STOCK, PRECIO, BODEGA_ID FROM PRODUCTOS ORDER BY ID");
          ResultSet rs = ps.executeQuery()) {
       List<Producto> out = new ArrayList<>();
       while (rs.next()) out.add(map(rs));
@@ -50,9 +72,10 @@ public class ProductosFunction {
     }
   }
 
-  private HttpResponseMessage obtener(HttpRequestMessage<?> req, Long id) throws SQLException, IOException {
+  private HttpResponseMessage obtener(HttpRequestMessage<?> req, long id) throws SQLException, IOException {
     try (Connection con = Db.connect();
-         PreparedStatement ps = con.prepareStatement("SELECT ID, SKU, NOMBRE, STOCK, PRECIO, BODEGA_ID FROM PRODUCTOS WHERE ID = ?")) {
+         PreparedStatement ps = con.prepareStatement(
+             "SELECT ID, SKU, NOMBRE, STOCK, PRECIO, BODEGA_ID FROM PRODUCTOS WHERE ID=?")) {
       ps.setLong(1, id);
       try (ResultSet rs = ps.executeQuery()) {
         if (rs.next()) return json(req, map(rs), HttpStatus.OK);
@@ -61,49 +84,95 @@ public class ProductosFunction {
     }
   }
 
-  private HttpResponseMessage crear(HttpRequestMessage<Optional<String>> req) throws Exception {
-    Producto in = MAPPER.readValue(req.getBody().orElse("{}"), Producto.class);
-    try (Connection con = Db.connect();
-         PreparedStatement ps = con.prepareStatement(
-           "INSERT INTO PRODUCTOS (SKU, NOMBRE, STOCK, PRECIO, BODEGA_ID) VALUES (?,?,?,?,?)", new String[]{"ID"})) {
-      ps.setString(1, in.getSku());
-      ps.setString(2, in.getNombre());
-      ps.setInt(3, in.getStock() == null ? 0 : in.getStock());
-      ps.setBigDecimal(4, in.getPrecio() == null ? BigDecimal.ZERO : in.getPrecio());
-      if (in.getBodegaId() == null) ps.setNull(5, Types.NUMERIC); else ps.setLong(5, in.getBodegaId());
-      ps.executeUpdate();
-      try (ResultSet keys = ps.getGeneratedKeys()) {
-        if (keys.next()) return obtener(req, keys.getLong(1));
+  private HttpResponseMessage crear(HttpRequestMessage<Optional<String>> req) {
+    try {
+      final String body = req.getBody().orElse("");
+      if (body.isBlank()) return badRequest(req, "{\"error\":\"Body vacío\"}");
+
+      Producto in = MAPPER.readValue(body, Producto.class);
+
+      // Validación mínima
+      if (isBlank(in.getSku()) || isBlank(in.getNombre())) {
+        return badRequest(req, "{\"error\":\"sku y nombre son obligatorios\"}");
       }
-      return req.createResponseBuilder(HttpStatus.CREATED).build();
+      if (in.getStock() == null) in.setStock(0);
+      if (in.getPrecio() == null) in.setPrecio(BigDecimal.ZERO);
+
+      try (Connection con = Db.connect();
+           PreparedStatement ps = con.prepareStatement(
+               // Si tu ID es IDENTITY o hay trigger/sequence que lo setea, no incluyas ID
+               "INSERT INTO PRODUCTOS (SKU, NOMBRE, STOCK, PRECIO, BODEGA_ID) VALUES (?,?,?,?,?)"
+           )) {
+        ps.setString(1, in.getSku());
+        ps.setString(2, in.getNombre());
+        ps.setInt(3, in.getStock());
+        ps.setBigDecimal(4, in.getPrecio());
+        if (in.getBodegaId() == null) ps.setNull(5, Types.NUMERIC); else ps.setLong(5, in.getBodegaId());
+
+        int rows = ps.executeUpdate();
+        if (rows > 0) {
+          return req.createResponseBuilder(HttpStatus.CREATED)
+              .header("Content-Type","application/json")
+              .body("{\"status\":\"created\"}")
+              .build();
+        }
+        return serverError(req, "{\"error\":\"Insert no afectó filas\"}");
+      }
+    } catch (com.fasterxml.jackson.databind.JsonMappingException jm) {
+      return badRequest(req, "{\"error\":\"JSON inválido\",\"detalle\":\"" +
+          jm.getOriginalMessage().replace("\"","'") + "\"}");
+    } catch (SQLException ex) {
+      return dbError(req, ex);
+    } catch (Exception e) {
+      return serverError(req, "{\"error\":\"server\",\"message\":\"" +
+          e.getMessage().replace("\"","'") + "\"}");
     }
   }
 
-  private HttpResponseMessage actualizar(HttpRequestMessage<Optional<String>> req, Long id) throws Exception {
-    Producto in = MAPPER.readValue(req.getBody().orElse("{}"), Producto.class);
-    try (Connection con = Db.connect();
-         PreparedStatement ps = con.prepareStatement(
-           "UPDATE PRODUCTOS SET SKU=?, NOMBRE=?, STOCK=?, PRECIO=?, BODEGA_ID=? WHERE ID=?")) {
-      ps.setString(1, in.getSku());
-      ps.setString(2, in.getNombre());
-      ps.setInt(3, in.getStock() == null ? 0 : in.getStock());
-      ps.setBigDecimal(4, in.getPrecio() == null ? BigDecimal.ZERO : in.getPrecio());
-      if (in.getBodegaId() == null) ps.setNull(5, Types.NUMERIC); else ps.setLong(5, in.getBodegaId());
-      ps.setLong(6, id);
-      int rows = ps.executeUpdate();
-      if (rows == 0) return req.createResponseBuilder(HttpStatus.NOT_FOUND).build();
-      return obtener(req, id);
+  private HttpResponseMessage actualizar(HttpRequestMessage<Optional<String>> req, long id) {
+    try {
+      Producto in = MAPPER.readValue(req.getBody().orElse("{}"), Producto.class);
+      if (in.getStock() == null) in.setStock(0);
+      if (in.getPrecio() == null) in.setPrecio(BigDecimal.ZERO);
+
+      try (Connection con = Db.connect();
+           PreparedStatement ps = con.prepareStatement(
+               "UPDATE PRODUCTOS SET SKU=?, NOMBRE=?, STOCK=?, PRECIO=?, BODEGA_ID=? WHERE ID=?"
+           )) {
+        ps.setString(1, in.getSku());
+        ps.setString(2, in.getNombre());
+        ps.setInt(3, in.getStock());
+        ps.setBigDecimal(4, in.getPrecio());
+        if (in.getBodegaId() == null) ps.setNull(5, Types.NUMERIC); else ps.setLong(5, in.getBodegaId());
+        ps.setLong(6, id);
+
+        int rows = ps.executeUpdate();
+        if (rows == 0) return req.createResponseBuilder(HttpStatus.NOT_FOUND).build();
+        return obtener(req, id);
+      }
+    } catch (com.fasterxml.jackson.databind.JsonMappingException jm) {
+      return badRequest(req, "{\"error\":\"JSON inválido\",\"detalle\":\"" +
+          jm.getOriginalMessage().replace("\"","'") + "\"}");
+    } catch (SQLException ex) {
+      return dbError(req, ex);
+    } catch (Exception e) {
+      return serverError(req, "{\"error\":\"server\",\"message\":\"" +
+          e.getMessage().replace("\"","'") + "\"}");
     }
   }
 
-  private HttpResponseMessage eliminar(HttpRequestMessage<?> req, Long id) throws SQLException {
+  private HttpResponseMessage eliminar(HttpRequestMessage<?> req, long id) {
     try (Connection con = Db.connect();
          PreparedStatement ps = con.prepareStatement("DELETE FROM PRODUCTOS WHERE ID=?")) {
       ps.setLong(1, id);
       int rows = ps.executeUpdate();
       return req.createResponseBuilder(rows > 0 ? HttpStatus.NO_CONTENT : HttpStatus.NOT_FOUND).build();
+    } catch (SQLException ex) {
+      return dbError(req, ex);
     }
   }
+
+  /* ================== Helpers ================== */
 
   private static Producto map(ResultSet rs) throws SQLException {
     Long bodegaId = (rs.getObject("BODEGA_ID") == null ? null : rs.getLong("BODEGA_ID"));
@@ -124,8 +193,23 @@ public class ProductosFunction {
         .build();
   }
 
-  public HttpResponseMessage run(HttpRequestMessage<Optional<String>> req, ExecutionContext context) {
-    // TODO Auto-generated method stub
-    throw new UnsupportedOperationException("Unimplemented method 'run'");
+  private static HttpResponseMessage badRequest(HttpRequestMessage<?> req, String body) {
+    return req.createResponseBuilder(HttpStatus.BAD_REQUEST)
+        .header("Content-Type","application/json").body(body).build();
   }
+
+  private static HttpResponseMessage serverError(HttpRequestMessage<?> req, String body) {
+    return req.createResponseBuilder(HttpStatus.INTERNAL_SERVER_ERROR)
+        .header("Content-Type","application/json").body(body).build();
+  }
+
+  private static HttpResponseMessage dbError(HttpRequestMessage<?> req, SQLException ex) {
+    String body = "{\"error\":\"DB\",\"sqlstate\":\"" + ex.getSQLState() +
+        "\",\"code\":" + ex.getErrorCode() +
+        ",\"message\":\"" + ex.getMessage().replace("\"","'") + "\"}";
+    return req.createResponseBuilder(HttpStatus.INTERNAL_SERVER_ERROR)
+        .header("Content-Type","application/json").body(body).build();
+  }
+
+  private static boolean isBlank(String s) { return s == null || s.trim().isEmpty(); }
 }

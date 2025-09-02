@@ -14,7 +14,7 @@
         <java.version>11</java.version>
         <azure.functions.maven.plugin.version>1.37.0</azure.functions.maven.plugin.version>
         <azure.functions.java.library.version>3.1.0</azure.functions.java.library.version>
-        <functionAppName>fn-bodegas-1756521032436</functionAppName>
+        <functionAppName>fn-bodegas-octavio-001</functionAppName>
     </properties>
 
     <dependencies>

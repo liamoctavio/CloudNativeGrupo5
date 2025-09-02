@@ -1,5 +1,5 @@
 server:
   port: 8080
 functions:
-  productosBaseUrl: ${FN_PRODUCTOS_BASEURL:http://localhost:7071/api/productos}
-  bodegasBaseUrl:   ${FN_BODEGAS_BASEURL:http://localhost:7072/api/bodegas}
+  productosBaseUrl: ${FN_PRODUCTOS_BASEURL:http://localhost:7072/api/productos}
+  bodegasBaseUrl:   ${FN_BODEGAS_BASEURL:http://localhost:7071/api/bodegas}
