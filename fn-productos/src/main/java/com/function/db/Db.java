@@ -8,7 +8,7 @@ public final class Db {
   private Db() {}
 
   public static Connection connect() throws SQLException {
-    final String url  = getenvRequired("DB_URL");   // ej: jdbc:oracle:thin:@alias?TNS_ADMIN=C:/ruta/wallet
+    final String url  = getenvRequired("DB_URL"); 
     final String user = getenvRequired("DB_USER");
     final String pass = getenvRequired("DB_PASS");
     return DriverManager.getConnection(url, user, pass);
