@@ -1,5 +1,6 @@
 server:
   port: 8080
 functions:
-  productosBaseUrl: ${FN_PRODUCTOS_BASEURL:http://localhost:7072/api/productos}
-  bodegasBaseUrl:   ${FN_BODEGAS_BASEURL:http://localhost:7071/api/bodegas}
+  productosBaseUrl: ${FN_PRODUCTOS_BASEURL:https://fn-productos-aafwbhdscjd4gdgk.eastus2-01.azurewebsites.net/api/productos}
+  bodegasBaseUrl:   ${FN_BODEGAS_BASEURL:https://fn-bodegas-fgfecjddccayetcs.eastus2-01.azurewebsites.net/api/bodegas}
+  graphqlBaseUrl: ${FN_GRAPHQL_BASEURL:https://fn-graphql-hef7ewaqeqdgbjbr.eastus2-01.azurewebsites.net/api/graphql}

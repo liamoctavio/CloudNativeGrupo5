@@ -2,10 +2,12 @@ version: "3.8"
 services:
  
   bff:
-    build: ./bff-microservicio
+    image: liamoctavio/bff-microservicio:latest
     environment:
-      - FN_PRODUCTOS_BASEURL=http://host.docker.internal:7072/api/productos
-      - FN_BODEGAS_BASEURL=http://host.docker.internal:7071/api/bodegas
+      - FN_PRODUCTOS_BASEURL=https://fn-productos-aafwbhdscjd4gdgk.eastus2-01.azurewebsites.net/api/productos
+      - FN_BODEGAS_BASEURL=https://fn-bodegas-fgfecjddccayetcs.eastus2-01.azurewebsites.net/api/bodegas
+      - FN_GRAPHQL_BASEURL=https://fn-graphql-hef7ewaqeqdgbjbr.eastus2-01.azurewebsites.net/api/graphql}  
+
     ports:
       - "8080:8080"
   

@@ -29,4 +29,3 @@ public class Producto {
   public Long getBodegaId() { return bodegaId; }
   public void setBodegaId(Long bodegaId) { this.bodegaId = bodegaId; }
 }
-
