@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.sql.*;
 import java.util.*;
+import com.function.events.EventBusEG;
 
 public class ProductosFunction {
 
@@ -22,7 +23,7 @@ public class ProductosFunction {
       @HttpTrigger(
           name = "req",
           methods = {HttpMethod.GET, HttpMethod.POST},
-          authLevel = AuthorizationLevel.ANONYMOUS, 
+          authLevel = AuthorizationLevel.ANONYMOUS,
           route = "productos"
       ) HttpRequestMessage<Optional<String>> request,
       final ExecutionContext ctx) throws Exception {
@@ -34,13 +35,12 @@ public class ProductosFunction {
     }
   }
 
-
   @FunctionName("productosById")
   public HttpResponseMessage productosById(
       @HttpTrigger(
           name = "req",
           methods = {HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE},
-          authLevel = AuthorizationLevel.ANONYMOUS, 
+          authLevel = AuthorizationLevel.ANONYMOUS,
           route = "productos/{id}"
       ) HttpRequestMessage<Optional<String>> request,
       @BindingName("id") String idStr,
@@ -59,7 +59,6 @@ public class ProductosFunction {
       default:     return request.createResponseBuilder(HttpStatus.METHOD_NOT_ALLOWED).build();
     }
   }
-
 
   private HttpResponseMessage listar(HttpRequestMessage<?> req) throws SQLException, IOException {
     try (Connection con = Db.connect();
@@ -100,7 +99,6 @@ public class ProductosFunction {
 
       try (Connection con = Db.connect();
            PreparedStatement ps = con.prepareStatement(
-               // Si tu ID es IDENTITY o hay trigger/sequence que lo setea, no incluyas ID
                "INSERT INTO PRODUCTOS (SKU, NOMBRE, STOCK, PRECIO, BODEGA_ID) VALUES (?,?,?,?,?)"
            )) {
         ps.setString(1, in.getSku());
@@ -111,6 +109,25 @@ public class ProductosFunction {
 
         int rows = ps.executeUpdate();
         if (rows > 0) {
+          Long newId = fetchIdProductoBySku(con, in.getSku());
+          Map<String,Object> data = new HashMap<>();
+          if (newId != null) data.put("id", newId);
+          data.put("sku", in.getSku());
+          data.put("nombre", in.getNombre());
+          data.put("stock", in.getStock());
+          data.put("precio", in.getPrecio());
+          if (in.getBodegaId() != null) data.put("bodegaId", in.getBodegaId());
+
+          EventBusEG.publish("Inventario.Producto.Creado",
+              newId != null ? "/productos/"+newId : "/productos", data);
+
+          int umbral = Integer.parseInt(System.getenv().getOrDefault("UMBRAL_STOCK","10"));
+          if (in.getStock() < umbral) {
+            EventBusEG.publish("Inventario.Producto.StockBajo",
+                newId != null ? "/productos/"+newId : "/productos",
+                Map.of("stock", in.getStock(), "umbral", umbral, "sku", in.getSku()));
+          }
+
           return req.createResponseBuilder(HttpStatus.CREATED)
               .header("Content-Type","application/json")
               .body("{\"status\":\"created\"}")
@@ -148,6 +165,21 @@ public class ProductosFunction {
 
         int rows = ps.executeUpdate();
         if (rows == 0) return req.createResponseBuilder(HttpStatus.NOT_FOUND).build();
+        Map<String,Object> data = new HashMap<>();
+        data.put("id", id);
+        data.put("sku", in.getSku());
+        data.put("nombre", in.getNombre());
+        data.put("stock", in.getStock());
+        data.put("precio", in.getPrecio());
+        if (in.getBodegaId() != null) data.put("bodegaId", in.getBodegaId());
+        EventBusEG.publish("Inventario.Producto.Actualizado", "/productos/"+id, data);
+
+        int umbral = Integer.parseInt(System.getenv().getOrDefault("UMBRAL_STOCK","10"));
+        if (in.getStock() < umbral) {
+          EventBusEG.publish("Inventario.Producto.StockBajo",
+              "/productos/"+id, Map.of("id", id, "stock", in.getStock(), "umbral", umbral, "sku", in.getSku()));
+        }
+
         return obtener(req, id);
       }
     } catch (com.fasterxml.jackson.databind.JsonMappingException jm) {
@@ -166,6 +198,11 @@ public class ProductosFunction {
          PreparedStatement ps = con.prepareStatement("DELETE FROM PRODUCTOS WHERE ID=?")) {
       ps.setLong(1, id);
       int rows = ps.executeUpdate();
+
+      if (rows > 0) {
+        EventBusEG.publish("Inventario.Producto.Eliminado", "/productos/"+id, Map.of("id", id));
+      }
+
       return req.createResponseBuilder(rows > 0 ? HttpStatus.NO_CONTENT : HttpStatus.NOT_FOUND).build();
     } catch (SQLException ex) {
       return dbError(req, ex);
@@ -184,6 +221,13 @@ public class ProductosFunction {
         rs.getBigDecimal("PRECIO"),
         bodegaId
     );
+  }
+
+  private static Long fetchIdProductoBySku(Connection con, String sku) {
+    try (PreparedStatement q = con.prepareStatement("SELECT ID FROM PRODUCTOS WHERE SKU=?")) {
+      q.setString(1, sku);
+      try (ResultSet rs = q.executeQuery()) { return rs.next() ? rs.getLong(1) : null; }
+    } catch (SQLException e) { return null; }
   }
 
   private static HttpResponseMessage json(HttpRequestMessage<?> req, Object body, HttpStatus status) throws IOException {

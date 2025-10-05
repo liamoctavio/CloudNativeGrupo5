@@ -10,19 +10,19 @@ import com.microsoft.azure.functions.annotation.*;
 import java.io.IOException;
 import java.sql.*;
 import java.util.*;
+import com.function.events.EventBusEG;
 
 public class BodegasFunction {
 
   private static final ObjectMapper MAPPER = new ObjectMapper()
       .configure(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES, true);
 
-
   @FunctionName("bodegas")
   public HttpResponseMessage bodegasRoot(
       @HttpTrigger(
           name = "req",
           methods = {HttpMethod.GET, HttpMethod.POST},
-          authLevel = AuthorizationLevel.ANONYMOUS, 
+          authLevel = AuthorizationLevel.ANONYMOUS,
           route = "bodegas"
       ) HttpRequestMessage<Optional<String>> request,
       final ExecutionContext ctx) throws Exception {
@@ -34,13 +34,12 @@ public class BodegasFunction {
     }
   }
 
-
   @FunctionName("bodegasById")
   public HttpResponseMessage bodegasById(
       @HttpTrigger(
           name = "req",
           methods = {HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE},
-          authLevel = AuthorizationLevel.ANONYMOUS, 
+          authLevel = AuthorizationLevel.ANONYMOUS,
           route = "bodegas/{id}"
       ) HttpRequestMessage<Optional<String>> request,
       @BindingName("id") String idStr,
@@ -61,8 +60,6 @@ public class BodegasFunction {
       default:     return request.createResponseBuilder(HttpStatus.METHOD_NOT_ALLOWED).build();
     }
   }
-
-
 
   private HttpResponseMessage listar(HttpRequestMessage<?> req) throws SQLException, IOException {
     try (Connection con = Db.connect();
@@ -113,6 +110,15 @@ public class BodegasFunction {
         ps.setString(3, in.getDireccion());
         int rows = ps.executeUpdate();
         if (rows > 0) {
+          Long newId = fetchIdBodegaByCodigo(con, in.getCodigo());
+          Map<String,Object> data = new HashMap<>();
+          if (newId != null) data.put("id", newId);
+          data.put("codigo", in.getCodigo());
+          data.put("nombre", in.getNombre());
+          data.put("direccion", in.getDireccion());
+          EventBusEG.publish("Inventario.Bodega.Creada",
+              newId != null ? "/bodegas/"+newId : "/bodegas", data);
+
           return req.createResponseBuilder(HttpStatus.CREATED)
               .header("Content-Type","application/json")
               .body("{\"status\":\"created\"}")
@@ -156,6 +162,13 @@ public class BodegasFunction {
       ps.setLong(4, id);
       int rows = ps.executeUpdate();
       if (rows == 0) return req.createResponseBuilder(HttpStatus.NOT_FOUND).build();
+      Map<String,Object> data = new HashMap<>();
+      data.put("id", id);
+      data.put("codigo", in.getCodigo());
+      data.put("nombre", in.getNombre());
+      data.put("direccion", in.getDireccion());
+      EventBusEG.publish("Inventario.Bodega.Actualizada", "/bodegas/"+id, data);
+
       return obtener(req, id);
     }
   }
@@ -165,8 +178,19 @@ public class BodegasFunction {
          PreparedStatement ps = con.prepareStatement("DELETE FROM BODEGAS WHERE ID=?")) {
       ps.setLong(1, id);
       int rows = ps.executeUpdate();
+
+      if (rows > 0) {
+        EventBusEG.publish("Inventario.Bodega.Eliminada", "/bodegas/"+id, Map.of("id", id));
+      }
+
       return req.createResponseBuilder(rows > 0 ? HttpStatus.NO_CONTENT : HttpStatus.NOT_FOUND).build();
     }
+  }
+  private static Long fetchIdBodegaByCodigo(Connection con, String codigo) {
+    try (PreparedStatement q = con.prepareStatement("SELECT ID FROM BODEGAS WHERE CODIGO=?")) {
+      q.setString(1, codigo);
+      try (ResultSet rs = q.executeQuery()) { return rs.next() ? rs.getLong(1) : null; }
+    } catch (SQLException e) { return null; }
   }
 
   private static Bodega map(ResultSet rs) throws SQLException {
