@@ -13,8 +13,8 @@ public final class EventBusEG {
     if (client == null) {
       synchronized (EventBusEG.class) {
         if (client == null) {
-          String endpoint = System.getenv("https://eg-g05.eastus-1.eventgrid.azure.net/api/events");
-          String key      = System.getenv("8MNGJ5H9aq8nYrO6He6074HD8vjKp6QTg0VGfQSpOee0m4ubJbdjJQQJ99BJACYeBjFXJ3w3AAABAZEGE4eG");
+          String endpoint = System.getenv("EG_TOPIC_ENDPOINT");
+          String key      = System.getenv("EG_ACCESS_KEY");
           if (endpoint == null || key == null) {
             throw new IllegalStateException("Faltan EG_TOPIC_ENDPOINT / EG_ACCESS_KEY");
           }
