@@ -174,18 +174,59 @@ public class BodegasFunction {
   }
 
   private HttpResponseMessage eliminar(HttpRequestMessage<?> req, long id) throws SQLException {
-    try (Connection con = Db.connect();
-         PreparedStatement ps = con.prepareStatement("DELETE FROM BODEGAS WHERE ID=?")) {
-      ps.setLong(1, id);
-      int rows = ps.executeUpdate();
+  String onDelete = Optional.ofNullable(System.getenv("ON_DELETE_BODEGA")).orElse("NULL").toUpperCase();
+  Long defId = null;
+  if ("DEFAULT".equals(onDelete)) {
+    String env = System.getenv("DEFAULT_BODEGA_ID");
+    if (env != null && !env.isBlank()) {
+      try { defId = Long.parseLong(env.trim()); } catch (NumberFormatException ignore) {}
+    }
+    if (defId != null && defId == id) defId = null;
+  }
 
-      if (rows > 0) {
-        EventBusEG.publish("Inventario.Bodega.Eliminada", "/bodegas/"+id, Map.of("id", id));
+  try (Connection con = Db.connect()) {
+    con.setAutoCommit(false);
+    try {
+      if ("DEFAULT".equals(onDelete) && defId != null) {
+        try (PreparedStatement ps = con.prepareStatement(
+            "UPDATE PRODUCTOS SET BODEGA_ID=? WHERE BODEGA_ID=?")) {
+          ps.setLong(1, defId);
+          ps.setLong(2, id);
+          ps.executeUpdate();
+        }
+      } else {
+        try (PreparedStatement ps = con.prepareStatement(
+            "UPDATE PRODUCTOS SET BODEGA_ID=NULL WHERE BODEGA_ID=?")) {
+          ps.setLong(1, id);
+          ps.executeUpdate();
+        }
       }
 
-      return req.createResponseBuilder(rows > 0 ? HttpStatus.NO_CONTENT : HttpStatus.NOT_FOUND).build();
+      int rows;
+      try (PreparedStatement ps = con.prepareStatement("DELETE FROM BODEGAS WHERE ID=?")) {
+        ps.setLong(1, id);
+        rows = ps.executeUpdate();
+      }
+
+      if (rows > 0) {
+        con.commit();
+        EventBusEG.publish("Inventario.Bodega.Eliminada", "/bodegas/"+id, Map.of("id", id));
+
+        return req.createResponseBuilder(HttpStatus.NO_CONTENT).build();
+      } else {
+        con.rollback();
+        return req.createResponseBuilder(HttpStatus.NOT_FOUND).build();
+      }
+
+    } catch (SQLException ex) {
+      con.rollback();
+      throw ex;
+    } finally {
+      con.setAutoCommit(true);
     }
   }
+}
+
   private static Long fetchIdBodegaByCodigo(Connection con, String codigo) {
     try (PreparedStatement q = con.prepareStatement("SELECT ID FROM BODEGAS WHERE CODIGO=?")) {
       q.setString(1, codigo);
